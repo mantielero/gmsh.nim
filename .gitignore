@@ -1,0 +1,4 @@
+examples/*
+*.nim~
+src/*
+!src/*.nim

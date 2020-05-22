@@ -1,62 +1,14 @@
 import ../wrapper/gmsh_wrapper
 import math
 
-type
-  Point*      = tuple[x,y,z:float]
-  PointTag*   = Natural
-  CurveTag*   = cint
-  WireTag*    = cint
-  SurfaceTag* = cint
-  ShellTag*   = cint
-  VolumeTag*  = cint
-  #DimTag*     = tuple[dim:range[0..3], id:cint]
-  DimTag*     = object
-    dim*:range[cint(0)..cint(3)]
-    id*:cint
 
 
-proc flatten(items:seq[DimTag]):seq[cint] =
-  var tmp = newSeq[cint]( 2 * items.len )
-  for i, item in items:
-    tmp[i*2] = item.dim.cint
-    tmp[i*2 + 1] = item.id
-  return tmp
 
-
-proc getOutDimTags(outDimTags:ptr cint, outDimTagsN:uint):seq[DimTag] =
-  var arr = cast[ptr UncheckedArray[cint]](outDimTags)
-  let n = (outDimTagsN.int / 2).int
-  var t = newSeq[DimTag](n)
-  for i in 0..<n:
-    t[i] = DimTag(dim:arr[i*2], id:arr[i*2+1])
-  return t
-
-
-proc getOutDimTagsMap(outDimTagsMap:ptr ptr cint,outDimTagsMapN:ptr uint, outDimTagsMapNN:uint):seq[seq[DimTag]] =
-  ##[
-  This is a helper function to obtain the children associated to each parent.
-  ]##
-  
-  let arrMapN = cast[ptr UncheckedArray[uint]](outDimTagsMapN)      # Longitudes de las listas
-  var arrMapPtr = cast[ptr UncheckedArray[ptr cint]](outDimTagsMap) # Array con los punteros a las parejas 
-  var myMap:seq[seq[DimTag]]
-  for i in 0..<outDimTagsMapNN:   # Iteramos en la lista principal.
-    let m = (arrMapN[i].int / 2).int  
-    #echo "Lista #", i
-    #echo "   Contiene: ",m, " elementos"
-    var mm = cast[ptr UncheckedArray[cint]](arrMapPtr[i])    # Puntero a cada lista
-    var lista:seq[DimTag] # Parejas
-    for j in 0..<m:
-      let tmp = DimTag(dim:mm[j*2], id:mm[j*2+1])
-      #echo "i:",i, " j:", j, " --> ", tmp
-      lista &= tmp
-    myMap &= lista
-  return myMap
 
 
 #----
 
-proc addPoint*(p:Point; meshSize:float = 0.0; tag:int = -1):PointTag =
+proc newPoint*(p:Point; meshSize:float = 0.0; tag:int = -1):seq[PointTag] =
   ##[
   Add a geometrical point in the OpenCASCADE CAD representation, at
   coordinates (x', y', z'). If meshSize' is > 0, add a meshing constraint
@@ -68,9 +20,16 @@ proc addPoint*(p:Point; meshSize:float = 0.0; tag:int = -1):PointTag =
   var ierr:cint  
   let t = gmshModelOccAddPoint(p.x.cdouble, p.y.cdouble, p.z.cdouble, meshSize.cdouble, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new point")  
-  return t.PointTag
+  return @[t.PointTag]
 
-proc line*(startTag, endTag:PointTag; tag:int = -1):CurveTag =
+proc newPoint*( points:seq[Point]; meshSize:float = 0.0):seq[PointTag] =
+  var tmp:seq[PointTag]
+  for point in points:
+    tmp &= newPoint(point, meshSize)
+  return tmp
+  
+
+proc newLine*(startTag, endTag:PointTag; tag:int = -1):seq[CurveTag] =
   ##[
   Add a straight line segment between the two points with tags startTag' and
   endTag'. If tag' is positive, set the tag explicitly; otherwise a new tag
@@ -79,7 +38,15 @@ proc line*(startTag, endTag:PointTag; tag:int = -1):CurveTag =
   var ierr:cint  
   let t = gmshModelOccAddLine(startTag.cint, endTag.cint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new line")  
-  return t.CurveTag
+  return @[t.CurveTag]
+
+proc newLine*( tags:seq[PointTag]; close:bool = false):seq[CurveTag] =
+  var tmp = newSeq[CurveTag](tags.len-1)
+  for i in 0..<tags.len-1:
+    tmp[i] = newLine( tags[i], tags[i+1])[0]
+  if close:
+    tmp &= newLine( tags[tags.len-1], tags[0])
+  return tmp
 
 
 proc addCircleArc*(startTag, centerTag, endTag:PointTag; tag:int = -1):CurveTag =
@@ -94,7 +61,8 @@ proc addCircleArc*(startTag, centerTag, endTag:PointTag; tag:int = -1):CurveTag 
   assert( ierr == 0, "error while adding a new circle arc")  
   return t.CurveTag
 
-proc addCircle*(p:Point, r:float; tag:int = -1;angle1:float = 0.0; angle2:float = 2.0 * PI ):CurveTag =
+proc addCircle*( p:Point, r:float; tag:int = -1;
+                 angle1:float = 0.0; angle2:float = 2.0 * PI ):CurveTag =
   ##[
   Add a circle of center (x', y', z') and radius r'. If tag' is
   positive, set the tag explicitly; otherwise a new tag is selected
@@ -144,16 +112,17 @@ proc addEllipse*(p:Point, r1,r2:float; tag:int = -1;angle1:float = 0.0; angle2:f
   return t.CurveTag
 
 
-proc addSpline( pointTags:seq[PointTag]; tag:int = -1 ):CurveTag =
+proc addSpline*( pointTags:seq[PointTag]; tag:int = -1 ):CurveTag =
   ##[
   Add a spline (C2 b-spline) curve going through the points pointTags'. If
   tag' is positive, set the tag explicitly; otherwise a new tag is selected
   automatically. Create a periodic curve if the first and last points are the
   same. Return the tag of the spline curve.
   ]##
+  echo repr pointTags
   var ierr:cint  
   let t = gmshModelOccAddSpline( cast[ptr cint](pointTags[0].unsafeAddr), 
-                                 pointTags.len.uint, tag.cint, ierr.unsafeAddr)
+                                 pointTags.len.cuint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")  
   return t.CurveTag  
 
@@ -175,11 +144,11 @@ proc addBSpline( pointTags:seq[PointTag], degree:int ; tag:int = -1;
   #let weightsPtr = if weights.len > 0:  else: weights.unsafeAddr
   #let knotsPtr = if knots.len > 0:  else: knots.unsafeAddr
   #let multiplicitiesPtr = if multiplicities.len > 0: multiplicities[0].unsafeAddr else: multiplicities.unsafeAddr    
-  let t = gmshModelOccAddBSpline( cast[ptr cint](pointTags[0].unsafeAddr), pointTags.len.uint, 
+  let t = gmshModelOccAddBSpline( cast[ptr cint](pointTags[0].unsafeAddr), pointTags.len.cuint, 
                  tag.cint, degree.cint,
-                 cast[ptr cdouble](weights[0].unsafeAddr), weights.len.uint, 
-                 cast[ptr cdouble](knots[0].unsafeAddr), knots.len.uint,
-                 cast[ptr cint](pointTags[0].unsafeAddr), multiplicities.len.uint,                 
+                 cast[ptr cdouble](weights[0].unsafeAddr), weights.len.cuint, 
+                 cast[ptr cdouble](knots[0].unsafeAddr), knots.len.cuint,
+                 cast[ptr cint](pointTags[0].unsafeAddr), multiplicities.len.cuint,                 
                   ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new b-spline")  
   return t.CurveTag 
@@ -193,13 +162,13 @@ proc addBezier( pointTags:seq[PointTag]; tag:int = -1 ):CurveTag =
   ]##
   var ierr:cint  
   let t = gmshModelOccAddBezier( cast[ptr cint](pointTags[0].unsafeAddr), 
-                                 pointTags.len.uint, tag.cint, ierr.unsafeAddr)
+                                 pointTags.len.cuint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")  
   return t.CurveTag 
 
 
 # TODO: CurveTag or WireTag???
-proc addWire( curveTags:seq[CurveTag]; tag:int = -1;checkClosed:bool = true ):CurveTag =
+proc addWire*( curveTags:seq[CurveTag]; tag:int = -1;checkClosed:bool = false ):WireTag =
   ##[
   Add a wire (open or closed) formed by the curves curveTags'. Note that an
   OpenCASCADE wire can be made of curves that share geometrically identical
@@ -210,12 +179,12 @@ proc addWire( curveTags:seq[CurveTag]; tag:int = -1;checkClosed:bool = true ):Cu
   var ierr:cint  
   let check:cint = if checkClosed: 1 else: 0
   let t = gmshModelOccAddWire( cast[ptr cint](curveTags[0].unsafeAddr), 
-                                 curveTags.len.uint, tag.cint, check, ierr.unsafeAddr)
+                                 curveTags.len.cuint, tag.cint, check, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new wire")  
-  return t.CurveTag 
+  return t.WireTag 
 
 
-proc addCurveLoop( curveTags:seq[CurveTag]; tag:int = -1 ):CurveTag =
+proc newCurveLoop*( curveTags:seq[CurveTag]; tag:int = -1 ):seq[WireTag] =
   ##[
   Add a curve loop (a closed wire) formed by the curves curveTags'.
   curveTags' should contain tags of curves forming a closed loop. Note that
@@ -226,12 +195,13 @@ proc addCurveLoop( curveTags:seq[CurveTag]; tag:int = -1 ):CurveTag =
   ]##
   var ierr:cint  
   let t = gmshModelOccAddCurveLoop( cast[ptr cint](curveTags[0].unsafeAddr), 
-                                    curveTags.len.uint, tag.cint, ierr.unsafeAddr)
+                                    curveTags.len.cuint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new curve loop")  
-  return t.CurveTag 
+  return @[t.WireTag]
 
 
-proc addRectangle*( p:Point, dx,dy:float; tag:int = -1; roundedRadius:float = -1.0 ):CurveTag =
+proc addRectangle*( p:Point, dx,dy:float; tag:int = -1; 
+                    roundedRadius:float = -1.0 ):CurveTag =
   ##[
   Add a rectangle with lower left corner at (x', y', z') and upper right
   corner at (x' + dx', y' + dy', z'). If tag' is positive, set the tag
@@ -246,7 +216,7 @@ proc addRectangle*( p:Point, dx,dy:float; tag:int = -1; roundedRadius:float = -1
   return t.CurveTag
 
 
-proc addDisk*( p:Point, rx, ry:float; tag:int = -1 ):CurveTag =
+proc addDisk*( p:Point, rx, ry:float; tag:int = -1 ):SurfaceTag =
   ##[
   Add a disk with center (xc', yc', zc') and radius rx' along the x-axis
   and ry' along the y-axis. If tag' is positive, set the tag explicitly;
@@ -257,10 +227,10 @@ proc addDisk*( p:Point, rx, ry:float; tag:int = -1 ):CurveTag =
                                rx.cdouble, ry.cdouble, 
                                tag.cint,  ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new rectangle")  
-  return t.CurveTag
+  return t.SurfaceTag
 
 
-proc addPlaneSurface*( wireTags:seq[WireTag]; tag:int = -1 ):SurfaceTag =
+proc newPlaneSurface*( wireTags:seq[WireTag]; tag:int = -1 ):seq[SurfaceTag] =
   ##[
   Add a plane surface defined by one or more curve loops (or closed wires)
   wireTags'. The first curve loop defines the exterior contour; additional
@@ -270,9 +240,9 @@ proc addPlaneSurface*( wireTags:seq[WireTag]; tag:int = -1 ):SurfaceTag =
   ]##
   var ierr:cint  
   let t = gmshModelOccAddPlaneSurface( cast[ptr cint](wireTags[0].unsafeAddr), 
-                                       wireTags.len.uint, tag.cint, ierr.unsafeAddr)
+                                       wireTags.len.cuint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new plane surface")  
-  return t.SurfaceTag 
+  return @[t.SurfaceTag]
 
 
 proc addPlaneSurface*( wire:WireTag, points:seq[PointTag]; tag:int = -1 ):SurfaceTag =
@@ -284,7 +254,7 @@ proc addPlaneSurface*( wire:WireTag, points:seq[PointTag]; tag:int = -1 ):Surfac
   ]##
   var ierr:cint  
   let t = gmshModelOccAddSurfaceFilling( wire.cint, tag.cint, 
-                cast[ptr cint](points[0].unsafeAddr), points.len.uint, ierr.unsafeAddr)
+                cast[ptr cint](points[0].unsafeAddr), points.len.cuint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new plane surface")  
   return t.SurfaceTag 
 
@@ -300,7 +270,7 @@ proc addPlaneSurfaceLoop*( surfaceTags:seq[SurfaceTag]; tag:int = -1; sewing:boo
   var ierr:cint  
   let sew:cint = if sewing: 1 else: 0
   let t = gmshModelOccAddSurfaceLoop( cast[ptr cint](surfaceTags[0].unsafeAddr), 
-                                       surfaceTags.len.uint, tag.cint, sew, ierr.unsafeAddr)
+                                       surfaceTags.len.cuint, tag.cint, sew, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new plane surface")  
   return t.ShellTag 
 
@@ -314,7 +284,7 @@ proc addVolume*(shells:seq[ShellTag]; tag:int = -1):VolumeTag =
   ]##
   var ierr:cint
   let t = gmshModelOccAddVolume( cast[ptr cint](shells[0].unsafeAddr), 
-                                 shells.len.uint, tag.cint, ierr.unsafeAddr)
+                                 shells.len.cuint, tag.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new plane surface")  
   return t.VolumeTag     
 
@@ -337,7 +307,6 @@ proc sphere*( p:Point, radius:float; tag:int = -1;
                                  angle1.cdouble, angle2.cdouble, angle3.cdouble,
                                  ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  echo repr t
   return DimTag(dim:3, id:t)   
 
 
@@ -437,7 +406,7 @@ proc addTorus*( p:Point; r1, r2:float; tag:int = -1;
 proc addThruSections*( wires:seq[WireTag]; tag:int = -1; 
             makeSolid:bool = true; 
             makeRuled:bool = false;
-            maxDegree:int = -1 ):seq[int] =
+            maxDegree:int = -1 ):seq[DimTag] =
   ##[
   Add a volume (if the optional argument makeSolid' is set) or surfaces
   defined through the open or closed wires wireTags'. 
@@ -457,25 +426,22 @@ proc addThruSections*( wires:seq[WireTag]; tag:int = -1;
   let solid:cint = if makeSolid: 1  else: 0
   let ruled:cint = if makeRuled: 1 else: 0
   gmshModelOccAddThruSections( cast[ptr cint](wires[0].unsafeAddr),
-                wires.len.uint, 
+                wires.len.cuint, 
                 outDimTagsPtr.unsafeAddr, outDimTagsN.unsafeAddr,
                 tag.cint,
                 solid, ruled, maxDegree.cint,
                 ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTagsPtr)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTagsPtr, outDimTagsN) 
+
 
 
 #proc gmshModelOccAddThickSolid*(volumeTag: cint; excludeSurfaceTags: ptr cint;
-#                               excludeSurfaceTags_n: uint; offset: cdouble;
-#                               outDimTags: ptr ptr cint; outDimTags_n: ptr uint;
+#                               excludeSurfaceTags_n: cuint; offset: cdouble;
+#                               outDimTags: ptr ptr cint; outDimTags_n: ptr cuint;
 #                               tag: cint; ierr: ptr cint) {.importc, cdecl, impgmshcDyn.}
 proc addThickSolid*( volume:VolumeTag, offset:float;excludeSurfaceTags:seq[SurfaceTag] = @[];
-            tag:int = -1 ):seq[int] =
+            tag:int = -1 ):seq[DimTag] =
   ##[
   Add a hollowed volume built from an initial volume volumeTag' and a set of
   faces from this volume excludeSurfaceTags', which are to be removed. The
@@ -489,22 +455,18 @@ proc addThickSolid*( volume:VolumeTag, offset:float;excludeSurfaceTags:seq[Surfa
   var outDimTagsN:uint
 
   gmshModelOccAddThickSolid(  volume.cint,
-                cast[ptr cint](excludeSurfaceTags[0].unsafeAddr), excludeSurfaceTags.len.uint, 
+                cast[ptr cint](excludeSurfaceTags[0].unsafeAddr), excludeSurfaceTags.len.cuint, 
                 offset.cdouble, 
                 outDimTagsPtr.unsafeAddr, outDimTagsN.unsafeAddr,
                 tag.cint,
                 ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTagsN)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTagsPtr, outDimTagsN) 
 
 
 proc extrude*( dimTags:seq[int], dx, dy,dz:float; 
                numElements:seq[int] = @[];
-               heights:seq[float] = @[]; recombine:bool = false ):seq[int] =
+               heights:seq[float] = @[]; recombine:bool = false ):seq[DimTag] =
   ##[
   Extrude the model entities dimTags' by translation along (dx', dy',
   dz'). 
@@ -523,24 +485,20 @@ proc extrude*( dimTags:seq[int], dx, dy,dz:float;
   var numElementsPtr = if numElements.len == 0: nil else:  numElements[0].unsafeAddr
   var heightsPtr = if heights.len == 0: nil else:  heights[0].unsafeAddr
   var recomb:cint = if recombine: 1 else: 0
-  gmshModelOccExtrude( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  gmshModelOccExtrude( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
             dx.cdouble, dy.cdouble, dz.cdouble,
             outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
-            cast[ptr cint](numElementsPtr), numElements.len.uint, 
-            cast[ptr cdouble](heightsPtr), heights.len.uint,
+            cast[ptr cint](numElementsPtr), numElements.len.cuint, 
+            cast[ptr cdouble](heightsPtr), heights.len.cuint,
             recomb,
             ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
 proc revolve*( dimTags:seq[int], angle, x, y, z, ax, ay, az:float; 
                numElements:seq[int] = @[];
-               heights:seq[float] = @[]; recombine:bool = false ):seq[int] =
+               heights:seq[float] = @[]; recombine:bool = false ):seq[DimTag] =
   ##[
   Extrude the model entities dimTags' by rotation of angle' radians around
   the axis of revolution defined by the point (x', y', z') and the
@@ -562,42 +520,36 @@ proc revolve*( dimTags:seq[int], angle, x, y, z, ax, ay, az:float;
   var numElementsPtr = if numElements.len == 0: nil else:  numElements[0].unsafeAddr
   var heightsPtr = if heights.len == 0: nil else:  heights[0].unsafeAddr
   var recomb:cint = if recombine: 1 else: 0
-  gmshModelOccRevolve( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  gmshModelOccRevolve( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
             x.cdouble, y.cdouble, z.cdouble, ax.cdouble, ay.cdouble, az.cdouble, angle.cdouble,
             outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
-            cast[ptr cint](numElementsPtr), numElements.len.uint, 
-            cast[ptr cdouble](heightsPtr), heights.len.uint, 
+            cast[ptr cint](numElementsPtr), numElements.len.cuint, 
+            cast[ptr cdouble](heightsPtr), heights.len.cuint, 
             recomb,
             ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
-proc addPipe*( dimTags:seq[int], wireTag:WireTag ):seq[int] =
+proc addPipe*( dimTags:seq[DimTag], wireTag:WireTag ):seq[DimTag] =
   ##[
   Add a pipe by extruding the entities dimTags' along the wire wireTag'.
   Return the pipe in outDimTags'.
   ]##
   var ierr:cint  
   var outDimTags:ptr cint
-  var outDimTagsN:uint 
-  gmshModelOccAddPipe( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  var outDimTagsN:uint
+  var objects = flatten(dimTags)
+  gmshModelOccAddPipe( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
             wireTag.cint, 
             outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
             ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
-proc fillet*( volumeTags:seq[int], curveTags:seq[int], radii:seq[float]; removeVolumne:bool = false ):seq[int] =
+proc fillet*( volumeTags:seq[cint], curveTags:seq[cint], radii:seq[float]; 
+              removeVolumne:bool = false ):seq[DimTag] =
   ##[
   Fillet the volumes volumeTags' on the curves curveTags' with radii
   radii'. The radii' vector can either contain a single radius, as many
@@ -610,17 +562,13 @@ proc fillet*( volumeTags:seq[int], curveTags:seq[int], radii:seq[float]; removeV
   var outDimTags:ptr cint
   var outDimTagsN:uint 
   var remove:cint = if removeVolumne: 1 else: 0
-  gmshModelOccFillet( cast[ptr cint](volumeTags[0].unsafeAddr), volumeTags.len.uint,
-                      cast[ptr cint](curveTags[0].unsafeAddr), curveTags.len.uint, 
-                      cast[ptr cdouble](radii[0].unsafeAddr), radii.len.uint,
+  gmshModelOccFillet( cast[ptr cint](volumeTags[0].unsafeAddr), volumeTags.len.cuint,
+                      cast[ptr cint](curveTags[0].unsafeAddr), curveTags.len.cuint, 
+                      cast[ptr cdouble](radii[0].unsafeAddr), radii.len.cuint,
                       outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                       remove, ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
 proc chamfer*( volumeTags:seq[int], curveTags:seq[int], surfaceTags:seq[int],
@@ -639,10 +587,10 @@ proc chamfer*( volumeTags:seq[int], curveTags:seq[int], surfaceTags:seq[int],
   var outDimTags:ptr cint
   var outDimTagsN:uint 
   var remove:cint = if removeVolumne: 1 else: 0
-  gmshModelOccChamfer( cast[ptr cint](volumeTags[0].unsafeAddr), volumeTags.len.uint,
-                       cast[ptr cint](curveTags[0].unsafeAddr), curveTags.len.uint, 
-                       cast[ptr cint](surfaceTags[0].unsafeAddr), surfaceTags.len.uint,
-                       cast[ptr cdouble](distances[0].unsafeAddr), distances.len.uint,                       
+  gmshModelOccChamfer( cast[ptr cint](volumeTags[0].unsafeAddr), volumeTags.len.cuint,
+                       cast[ptr cint](curveTags[0].unsafeAddr), curveTags.len.cuint, 
+                       cast[ptr cint](surfaceTags[0].unsafeAddr), surfaceTags.len.cuint,
+                       cast[ptr cdouble](distances[0].unsafeAddr), distances.len.cuint,                       
                        outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                        remove, ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
@@ -674,8 +622,8 @@ proc fuse*( objectDimTags:seq[int], toolDimTags:seq[int]; tag:int = -1; removeOb
 
   var remObject:cint = if removeObject: 1 else: 0
   var remTool:cint = if removeTool: 1 else: 0  
-  gmshModelOccFuse( cast[ptr cint](objectDimTags[0].unsafeAddr), objectDimTags.len.uint,
-                    cast[ptr cint](toolDimTags[0].unsafeAddr), toolDimTags.len.uint,                   
+  gmshModelOccFuse( cast[ptr cint](objectDimTags[0].unsafeAddr), objectDimTags.len.cuint,
+                    cast[ptr cint](toolDimTags[0].unsafeAddr), toolDimTags.len.cuint,                   
                     outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                     outDimTagsMap.unsafeAddr, outDimTagsMapN.unsafeAddr, outDimTagsMapNN.unsafeAddr,
                     tag.cint,
@@ -706,8 +654,8 @@ proc intersect*( objectDimTags:seq[int], toolDimTags:seq[int];
 
   var rObject:cint = if removeObject: 1 else: 0
   var rTool:cint = if removeTool: 1 else: 0  
-  gmshModelOccIntersect( cast[ptr cint](objectDimTags[0].unsafeAddr), objectDimTags.len.uint,
-                         cast[ptr cint](toolDimTags[0].unsafeAddr), toolDimTags.len.uint,                   
+  gmshModelOccIntersect( cast[ptr cint](objectDimTags[0].unsafeAddr), objectDimTags.len.cuint,
+                         cast[ptr cint](toolDimTags[0].unsafeAddr), toolDimTags.len.cuint,                   
                          outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                          outDimTagsMap.unsafeAddr, outDimTagsMapN.unsafeAddr, outDimTagsMapNN.unsafeAddr,
                          tag.cint, rObject, rTool, ierr.unsafeAddr )
@@ -745,37 +693,14 @@ proc cut*( objectDimTags:seq[DimTag], toolDimTags:seq[DimTag];
   let objects = flatten(objectDimTags)
   let tools = flatten(toolDimTags)
  
-  gmshModelOccCut( cast[ptr cint](objects[0].unsafeAddr), objects.len.uint,
-                   cast[ptr cint](tools[0].unsafeAddr), tools.len.uint,                   
+  gmshModelOccCut( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
+                   cast[ptr cint](tools[0].unsafeAddr), tools.len.cuint,                   
                    outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                    outDimTagsMap.unsafeAddr, outDimTagsMapN.unsafeAddr, outDimTagsMapNN.unsafeAddr,
                    tag.cint, removeObject.cint, removeTool.cint, ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface") 
   
-  let t = getOutDimTags(outDimTags, outDimTagsN) 
-  #[
-  var arr = cast[ptr UncheckedArray[cint]](outDimTags)
-  echo "outDimTagsMapNN: ", outDimTagsMapNN  
-  #echo repr outDimTags
-  let n = (outDimTagsN.int / 2).int
-  var t = newSeq[DimTag](n)
-  for i in 0..<n:
-    t[i] = DimTag(dim:arr[i*2], id:arr[i*2+1])
-  ]#
-  #[
-  let arrMapN = cast[ptr UncheckedArray[uint]](outDimTagsMapN)      # Longitudes de las listas
-  var arrMapPtr = cast[ptr UncheckedArray[ptr cint]](outDimTagsMap) # Array con los punteros a las parejas 
-  var myMap:seq[seq[DimTag]]
-  for i in 0..<outDimTagsMapNN:   # Iteramos en la lista principal.
-    echo "i: ", i
-    var mm = cast[ptr UncheckedArray[cint]](arrMapPtr[i])    # Puntero a cada lista
-    var lista:seq[DimTag] # Parejas
-    for j in 0..<arrMapN[i]:
-      let tmp = DimTag(dim:mm[j*2], id:mm[j*2+1])
-      echo i, " ", j, ": ", tmp
-      lista &= tmp
-    myMap &= lista
-  ]#
+  let t = getOutDimTags( outDimTags, outDimTagsN) 
   let myMap = getOutDimTagsMap(outDimTagsMap, outDimTagsMapN, outDimTagsMapNN)
   
   return (t, myMap)
@@ -818,8 +743,8 @@ proc fragment*( objectDimTags:seq[DimTag], toolDimTags:seq[DimTag];
   var outDimTagsMapN:ptr uint
   var outDimTagsMapNN:uint  
 
-  gmshModelOccFragment( cast[ptr cint](objects[0].unsafeAddr), objects.len.uint,
-                        cast[ptr cint](tools[0].unsafeAddr), tools.len.uint,                   
+  gmshModelOccFragment( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
+                        cast[ptr cint](tools[0].unsafeAddr), tools.len.cuint,                   
                         outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                         outDimTagsMap.unsafeAddr, outDimTagsMapN.unsafeAddr, outDimTagsMapNN.unsafeAddr,
                         tag.cint, removeObject.cint, removeTool.cint, ierr.unsafeAddr )
@@ -859,29 +784,55 @@ end
 
 ]#
 
-proc translate*( dimTags:seq[int], dx,dy,dz:float ) =
-  ##[
+proc translate*[N1,N2,N3:SomeNumber]( dimTags:seq[DimTag], dx:N1, dy:N2, dz:N3 ) =
+  ##[ DEPRECATED
   Translate the model entities dimTags' along (dx', dy', dz').
   ]##
   var ierr:cint  
+  let objects = flatten(dimTags)
+  gmshModelOccTranslate( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
+                         dx.cdouble, dy.cdouble, dz.cdouble, 
+                         ierr.unsafeAddr )
+  assert( ierr == 0, "error while adding a new plane surface")  
 
-  gmshModelOccTranslate( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
-                        dx.cdouble, dy.cdouble, dz.cdouble, 
+proc translate*[N1,N2,N3:SomeNumber]( tags:seq[Tag], dx:N1, dy:N2, dz:N3 ) =
+  ##[
+  Translate the model entities dimTags' along (dx', dy', dz').
+  ]##
+  var ierr:cint
+  let objects = flatten(tags)
+  gmshModelOccTranslate( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
+                         dx.cdouble, dy.cdouble, dz.cdouble, 
                          ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
 
 
-proc rotate*( dimTags:seq[int], p:Point, angle, ax, ay, az:float ) =
+
+proc rotate*( dimTags:seq[DimTag], p:Point,  ax, ay, az, angle:float ) =
+  ##[ DEPRECATED
+  Rotate the model entities dimTags' of angle' radians around the axis of
+  revolution defined by the point (x', y', z') and the direction (ax',
+  ay', az').
+  ]##
+  var ierr:cint  
+  let objects = flatten(dimTags)
+  gmshModelOccRotate( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
+                      p.x.cdouble, p.y.cdouble, p.z.cdouble, 
+                      ax.cdouble, ay.cdouble, az.cdouble, 
+                      angle.cdouble, ierr.unsafeAddr )
+  assert( ierr == 0, "error while adding a new plane surface") 
+
+proc rotate*[N:SomeNumber]( tags:seq[Tag], p:Point,  axe:Vec, angle:N ) =
   ##[
   Rotate the model entities dimTags' of angle' radians around the axis of
   revolution defined by the point (x', y', z') and the direction (ax',
   ay', az').
   ]##
   var ierr:cint  
-
-  gmshModelOccRotate( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  let objects = flatten(tags)
+  gmshModelOccRotate( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,
                       p.x.cdouble, p.y.cdouble, p.z.cdouble, 
-                      ax.cdouble, ay.cdouble, az.cdouble, 
+                      axe.x.cdouble, axe.y.cdouble, axe.z.cdouble, 
                       angle.cdouble, ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface") 
 
@@ -893,7 +844,7 @@ proc dilate*( dimTags:seq[int], p:Point, a, b, c:float ) =
   transformation.
   ]##
   var ierr:cint  
-  gmshModelOccDilate( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  gmshModelOccDilate( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
                       p.x.cdouble, p.y.cdouble, p.z.cdouble, 
                       a.cdouble, b.cdouble, c.cdouble, 
                       ierr.unsafeAddr )
@@ -906,7 +857,7 @@ proc mirror*( dimTags:seq[int], a, b, c, d:float ) =
   respect to the plane of equation a' x + b' y + c' z + d' = 0.
   ]##
   var ierr:cint  
-  gmshModelOccMirror( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  gmshModelOccMirror( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
                       a.cdouble, b.cdouble, c.cdouble, d.cdouble,
                       ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface") 
@@ -920,7 +871,7 @@ proc symmetrize*( dimTags:seq[int], a, b, c, d:float ) =
   release.)
   ]##
   var ierr:cint  
-  gmshModelOccSymmetrize( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+  gmshModelOccSymmetrize( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
                           a.cdouble, b.cdouble, c.cdouble, d.cdouble,
                           ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface") 
@@ -933,38 +884,60 @@ proc transform*( dimTags:seq[int], a:seq[float] ) =
   model entities dimTag'.
   ]##
   var ierr:cint  
-  gmshModelOccAffineTransform( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
-                               cast[ptr cdouble](a[0].unsafeAddr), a.len.uint,
+  gmshModelOccAffineTransform( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
+                               cast[ptr cdouble](a[0].unsafeAddr), a.len.cuint,
                                ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface") 
 
 
-proc copy*( dimTags:seq[int] ):seq[int] =
+proc copy*( dimTags:seq[DimTag] ):seq[DimTag] =
   ##[
   Copy the entities dimTags'; the new entities are returned in outDimTags'.
   ]##
   var ierr:cint  
+  var objects = flatten(dimTags)
   var outDimTags:ptr cint
   var outDimTagsN:uint 
-  gmshModelOccCopy( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,                  
+  gmshModelOccCopy( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,                  
                     outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                     ierr.unsafeAddr )
-  assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  assert( ierr == 0, "error while copying some entities")  
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
-proc remove*( dimTags:seq[int]; recursive:bool = false ) =
+proc asType*[T:Tag|SomeInteger,P:PointTag](newVal:T, original:P):P = newVal.P
+proc asType*[T:Tag|SomeInteger,P:CurveTag](newVal:T, original:P):P = newVal.P
+
+proc copy*[T:PointTag | CurveTag | WireTag | LoopTag | SurfaceTag | ShellTag | VolumeTag]( tags:seq[T] ):seq[T] =
+  ##[
+  Copy the entities dimTags'; the new entities are returned in outDimTags'.
+  ]##
+  var ierr:cint  
+  var objects = flatten(tags)
+  var outDimTags:ptr cint
+  var outDimTagsN:uint 
+  gmshModelOccCopy( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,                  
+                    outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
+                    ierr.unsafeAddr )
+  assert( ierr == 0, "error while copying some entities")  
+  let dimTags = getOutDimTags( outDimTags, outDimTagsN) 
+  var newTags = newSeq[T](tags.len)
+  for idx, item in dimTags:
+    newTags[idx] = item.id.T
+  return newTags
+
+  
+
+
+proc remove*( dimTags:seq[DimTag]; recursive:bool = false ) =
   ##[
   Remove the entities dimTags'. If recursive' is true, remove all the
   entities on their boundaries, down to dimension 0.
   ]##
   var ierr:cint  
   var recur:cint = if recursive: 1 else: 0
-  gmshModelOccRemove( cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,                  
+  let objects = flatten(dimTags)
+  gmshModelOccRemove( cast[ptr cint](objects[0].unsafeAddr), objects.len.cuint,                  
                       recur, ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
 
@@ -986,7 +959,7 @@ proc healShapes*( dimTags:seq[int] = @[];
                   fixSmallEdges:bool = true; 
                   fixSmallFaces:bool = true;  
                   sewFaces:bool = true;                                                      
-                  makeSolids:bool = true ):seq[int] =
+                  makeSolids:bool = true ):seq[DimTag] =
   ##[
   Apply various healing procedures to the entities dimTags' (or to all the
   entities in the model if dimTags' is empty). 
@@ -1004,18 +977,14 @@ proc healShapes*( dimTags:seq[int] = @[];
   let sew        :cint = if sewFaces      : 1 else: 0
   let solids     :cint = if makeSolids    : 1 else: 0
   gmshModelOccHealShapes( outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
-                          cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.uint,
+                          cast[ptr cint](dimTags[0].unsafeAddr), dimTags.len.cuint,
                           tolerance.cdouble, degenerated, smallEdges, smallFaces, sew, solids,
                           ierr.unsafeAddr )
   assert( ierr == 0, "error while adding a new plane surface")  
-  var arr = cast[ptr UncheckedArray[int]](outDimTagsN)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
                            
 
-proc importShapes(filename:string; format:string = ""; highestDimOnly:bool = true ):seq[int] =
+proc importShapes*(filename:string; format:string = ""; highestDimOnly:bool = true ):seq[DimTag] =
   ##[
   Import BREP, STEP or IGES shapes from the file fileName'. The imported
   entities are returned in outDimTags'. 
@@ -1035,14 +1004,10 @@ proc importShapes(filename:string; format:string = ""; highestDimOnly:bool = tru
                    outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                    highest, format.cstring, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN)
 
 
-proc importShapesNativePointer(shape:pointer, highestDimOnly:int):seq[int] =
+proc importShapesNativePointer*(shape:pointer, highestDimOnly:int):seq[DimTag] =
   ##[
   Imports an OpenCASCADE shape' by providing a pointer to a native
   OpenCASCADE TopoDS_Shape' object (passed as a pointer to void). The
@@ -1058,16 +1023,12 @@ proc importShapesNativePointer(shape:pointer, highestDimOnly:int):seq[int] =
                    outDimTags.unsafeAddr, outDimTagsN.unsafeAddr,
                    highestDimOnly.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")
-  var arr = cast[ptr UncheckedArray[int]](outDimTags)
-  var t = newSeq[int](outDimTagsN)
-  for i in 0..<outDimTagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags( outDimTags, outDimTagsN) 
 
 
-proc getEntities*( dim:int = -1 ):seq[int] =
+proc entities*( dim:int = -1 ):seq[DimTag] =
   ##[
-  Get all the OpenCASCADE entities. If dim' is >= 0, return only the
+  Get all the OpenCASCADE entities. If `dim` is >= 0, return only the
   entities of the specified dimension (e.g. points if dim' == 0). The
   entities are returned as a vector of (dim, tag) integer pairs.
   ]##
@@ -1076,14 +1037,10 @@ proc getEntities*( dim:int = -1 ):seq[int] =
   var tagsN:uint
   gmshModelOccGetEntities( tags.unsafeAddr, tagsN.unsafeAddr, dim.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")
-  var arr = cast[ptr UncheckedArray[int]](tags)
-  var t = newSeq[int](tagsN)
-  for i in 0..<tagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags(tags, tagsN)
 
 
-proc getEntitiesInBoundingBox*( bbMin, bbMax:Point; dim:int = -1):seq[int] =
+proc entitiesInBoundingBox*( bbMin, bbMax:Point; dim:int = -1):seq[DimTag] =
   ##[
   Get the OpenCASCADE entities in the bounding box defined by the two points
   (xmin', ymin', zmin') and (xmax', ymax', zmax'). If dim' is >= 0,
@@ -1097,19 +1054,15 @@ proc getEntitiesInBoundingBox*( bbMin, bbMax:Point; dim:int = -1):seq[int] =
                   bbMax.x.cdouble, bbMax.y.cdouble, bbMax.z.cdouble,  
                   tags.unsafeAddr, tagsN.unsafeAddr, dim.cint, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")
-  var arr = cast[ptr UncheckedArray[int]](tags)
-  var t = newSeq[int](tagsN)
-  for i in 0..<tagsN:
-    t[i] = arr[i]
-  return t
+  return getOutDimTags(tags, tagsN)
 
-
-proc getBoundingBox*( dim:int, tag:int):tuple[bbMin:Point, bbMax:Point] =
+proc getBoundingBox*[I:SomeInteger]( dim:I, tag:I):tuple[bbMin:Point, bbMax:Point] =
   ##[
   Get the bounding box (xmin', ymin', zmin'), (xmax', ymax', zmax') of
   the OpenCASCADE entity of dimension dim' and tag tag'.
   ]##
   var ierr:cint  
+  echo dim, " ", tag
   var xmin,ymin,zmin,xmax,ymax,zmax:cdouble
   gmshModelOccGetBoundingBox(dim.cint, tag.cint, 
                   xmin.unsafeAddr, ymin.unsafeAddr, zmin.unsafeAddr,
@@ -1121,7 +1074,7 @@ proc getBoundingBox*( dim:int, tag:int):tuple[bbMin:Point, bbMax:Point] =
            bbMax: (x:xmax.float, y:ymax.float, z:zmax.float) )
 
 
-proc getMass*( dim:int, tag:int):float =
+proc getMass*( dim:int, tag:int):float = #NOK
   ##[
   Get the mass of the OpenCASCADE entity of dimension dim' and tag tag'.
   ]##
@@ -1132,7 +1085,7 @@ proc getMass*( dim:int, tag:int):float =
   return mass.float
 
 
-proc getCenterOfMass*( dim:int, tag:int):Point =
+proc getCenterOfMass*( dim:int, tag:int):Point = #NOK
   ##[
   Get the center of mass of the OpenCASCADE entity of dimension dim' and tag
   tag'.
@@ -1141,10 +1094,10 @@ proc getCenterOfMass*( dim:int, tag:int):Point =
   var x,y,z:cdouble
   gmshModelOccGetCenterOfMass(dim.cint, tag.cint, x.unsafeAddr, y.unsafeAddr, z.unsafeAddr, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")
-  return (x:x.float,y:y.float,z:z.float)
+  return pt(x,y,z)
 
 
-proc getMatrixOfInertia*(dim:int, tag:int):seq[float] =
+proc getMatrixOfInertia*(dim:int, tag:int):seq[float] = #NOK
   ##[
   Get the matrix of inertia (by row) of the OpenCASCADE entity of dimension
   dim' and tag tag'.
@@ -1161,7 +1114,7 @@ proc getMatrixOfInertia*(dim:int, tag:int):seq[float] =
   return mat
 
 
-proc getMaxTag*(dim:int):int =
+proc getMaxTag*(dim:int):int = #NOK
   ##[
   Get the maximum tag of entities of dimension dim' in the OpenCASCADE CAD
   representation.
@@ -1172,7 +1125,7 @@ proc getMaxTag*(dim:int):int =
   return tmp.int
 
 
-proc SetMaxTag*(dim:int, maxTag:int ) =
+proc SetMaxTag*(dim:int, maxTag:int ) = #NOK
   ##[
   Set the maximum tag maxTag' for entities of dimension dim' in the
   OpenCASCADE CAD representation.
@@ -1182,7 +1135,7 @@ proc SetMaxTag*(dim:int, maxTag:int ) =
   assert( ierr == 0, "error while adding a new spline")   
 
 
-proc sync*() =
+proc sync*() =  #OK
   ##[
   Synchronize the OpenCASCADE CAD representation with the current Gmsh model.
   This can be called at any time, but since it involves a non trivial amount
@@ -1194,14 +1147,47 @@ proc sync*() =
   assert( ierr == 0, "error while adding a new spline")  
 
 
-proc meshSetSize*( dimTags:seq[DimTag], size:float) =
+proc meshSetSize*( dimTags:seq[DimTag], size:float) = #NOK
   ##[
   Set a mesh size constraint on the model entities dimTags'. Currently only
   entities of dimension 0 (points) are handled.
   ]##
   var ierr:cint  
-  gmshModelOccMeshSetSize( cast[ptr cint](dimTags[0].unsafeAddr), 
-                                 dimTags.len.uint, size.cdouble, ierr.unsafeAddr)
+  let objects = flatten(dimTags)  
+  gmshModelOccMeshSetSize( cast[ptr cint](objects[0].unsafeAddr), 
+                           objects.len.cuint, size.cdouble, ierr.unsafeAddr)
   assert( ierr == 0, "error while adding a new spline")  
 
+
+#------ Sugar baby
+proc newGroup*[T:Tag](dimN:int, tags:seq[T]; name:string = "" ):seq[GroupTag] = 
+  #let group = addPhysicalGroup(d, tag.cint)
+  #var tmp:seq[seq[Tag], seq[Tag], seq[Tag], seq[Tag]] = @[ @[], @[], @[], @[] ]
+  let values = castToCint(tags)
+  let group = addPhysicalGroup( dimN, values )
+
+  setPhysicalName(dimN, group[0], name)
+  return group
+
+proc newGroup*[T:PointTag](tags:seq[T]; name:string = "" ):seq[GroupTag]  = 
+  #let group = addPhysicalGroup(d, tag.cint)
+  #var tmp:seq[seq[Tag], seq[Tag], seq[Tag], seq[Tag]] = @[ @[], @[], @[], @[] ]
+  return newGroup(0, tags, name)
+  
+
+proc newGroup*[T:SurfaceTag | ShellTag](tags:seq[T]; name:string = "" ):seq[GroupTag]  = 
+  #let group = addPhysicalGroup(d, tag.cint)
+  #var tmp:seq[seq[Tag], seq[Tag], seq[Tag], seq[Tag]] = @[ @[], @[], @[], @[] ]
+  return newGroup(2, tags, name)
+
+
+proc newGroup*[T:CurveTag | LoopTag | WireTag](tags:seq[T]; name:string = "" ):seq[GroupTag]  = 
+  #let group = addPhysicalGroup(d, tag.cint)
+  #var tmp:seq[seq[Tag], seq[Tag], seq[Tag], seq[Tag]] = @[ @[], @[], @[], @[] ]
+  return newGroup(1, tags, name)
+
+proc newGroup*[T:VolumeTag](tags:seq[T]; name:string = "" ):seq[GroupTag]  = 
+  #let group = addPhysicalGroup(d, tag.cint)
+  #var tmp:seq[seq[Tag], seq[Tag], seq[Tag], seq[Tag]] = @[ @[], @[], @[], @[] ]
+  return newGroup(3, tags, name)
 

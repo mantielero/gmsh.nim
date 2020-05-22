@@ -73,55 +73,46 @@ proc main =
   #echo "Map:"
   #echo repr t2
 
-
-  # ovv contains the parent-child relationships for all the input entities:
-#[
-  addPoint( 0.0, 0.0, 0.0, lc, 1 )
-  addPoint( 0.1, 0.0, 0.0, lc, 2 )
-  addPoint( 0.1, 0.3, 0.0, lc, 3 )
-  addPoint( 0.0, 0.3, 0.0, lc, 4 )
-  addLine(1, 2, 1)
-  addLine(3, 2, 2)
-  addLine(3, 4, 3)
-  addLine(4, 1, 4)
-  addCurveLoop(@[4, 1, -2, 3], 1)
-  addPlaneSurface(@[1], 1)
-  addPhysicalGroup(1, @[1, 2, 4], 5)
-  let ps = addPhysicalGroup(2, @[1])
-  setPhysicalName(2, ps, "My surface")
-
-  # We can then add new points and curves in the same way as we did in `t1.nim`
-  addPoint(0.0, 0.4, 0.0, lc, 5);
-  addLine(4, 5, 5)
-
-  translate(@[@[0, 5]], -0.02, 0, 0)
-
-
-
-  echo "Points: ", points
-
-  var lines:seq[int]
-  lines &= addLine(1, 2, 1)
-  lines &= addLine(2, 3, 2)
-  lines &= addLine(3, points[3], 3)
-  lines &= addLine(points[3], 1) # try automatic assignement of tag
-
-  let loop = addCurveLoop(lines, 1)
-  let closeLoops = @[ loop ]
-
-  let surface = addPlaneSurface(closeLoops, 1)
-
-  let g5 = @[1,2,4]
-  let g6 = @[1]
-  addPhysicalGroup(1, g5, 5 )
-  let ps = addPhysicalGroup(2, g6, -1)
-  setPhysicalName(2, ps, "My surface")
-
-  geoSync()
+  sync() 
+  #[
+  Here the `Physical Volume' definitions can thus be made for the 5 spheres
+  directly, as the five spheres (volumes 4, 5, 6, 7 and 8), which will be
+  deleted by the fragment operations, will be recreated identically (albeit
+  with new surfaces) with the same tags:   
   ]#
-  sync()
+  for i in 1..5:
+    addPhysicalGroup(3, @[3+i], i)
+
+ 
+  #var tmp:seq[int]
+  #for item in t1:
+  #  tmp &= item.id.int
+  addPhysicalGroup(3, @[t1[t1.len-1].id.int], 10)
+
+  let 
+    lcar1 = 0.1
+    lcar2 = 0.0005
+    lcar3 = 0.055
+
+  let allPoints = entities(0)
+  allPoints.setSize(lcar1)
+
+  let boundary = getBoundary(holes,false, false, true)
+  boundary.setSize(lcar3)
+
+  let
+    eps = 1e-3
+    tmp1 = 0.5 - eps
+    tmp2 = 0.5 + eps
+    p1 = (x: tmp1 ,y: tmp1,z: tmp1)
+    p2 = (x: tmp2 ,y: tmp2,z: tmp2)
+  let points_bb = entitiesInBoundingBox(p1,p2, 0)  # We get the points 
+  #echo "Points: ", points_bb
+  setSize(points_bb, lcar2)
 
   meshGenerate(3)
   write("t16.msh")
+
+  finalize()
 
 main()
